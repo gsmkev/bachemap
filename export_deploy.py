@@ -38,8 +38,11 @@ def main():
         shutil.copy(ruta_onnx, SALIDA / "detector.onnx")
 
     # todo lo demás del bundle (pipeline de prioridad, DBSCAN, umbral, ROI, metadatos) no depende de
-    # torch para nada, así que se guarda tal cual en un pickle aparte, sin los pesos del detector
+    # torch para nada, así que se guarda tal cual en un pickle aparte, sin los pesos del detector.
+    # ojo: versiones["torch"] es un TorchVersion (subclase de str), no un str común, y pickle no lo
+    # puede leer sin torch instalado, así que se lo pasa a str antes de guardar
     liviano = {k: v for k, v in bundle.items() if k != "yolo_pt_bytes"}
+    liviano["versiones"] = {k: str(v) for k, v in liviano["versiones"].items()}
     joblib.dump(liviano, SALIDA / "pipeline.pkl", compress=3)
 
     mb_onnx = (SALIDA / "detector.onnx").stat().st_size / 1e6
