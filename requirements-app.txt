@@ -1,0 +1,9 @@
+# Dependencias de la demo desplegada (app.py), aparte de pyproject.toml: sin torch ni ultralytics,
+# el detector corre con onnxruntime. Pensado para un free tier sin GPU (Render, por ejemplo).
+streamlit>=1.35
+onnxruntime>=1.18
+numpy>=1.26
+pillow>=10.2
+pandas>=2.1
+scikit-learn>=1.4
+joblib>=1.3

@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: bachemap
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-app.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: BACHEMAP_MODEL_TAG
+        value: v1

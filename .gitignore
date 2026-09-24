@@ -1,0 +1,31 @@
+# Entorno
+.venv/
+__pycache__/
+*.py[cod]
+.claude
+
+# Credenciales: se versiona sólo la plantilla
+.env
+.env.*
+!.env.example
+
+# Salidas del notebook
+bachemap_work/
+runs/
+wandb/
+.ipynb_checkpoints/
+
+# Artefactos de la entrega: model.pkl va como Release de GitHub, no en el historial
+model.pkl
+datos_muestra.csv
+metadata.json
+resumen_resultados.json
+*.pt
+*.zip
+
+# Modelos para el deploy sin GPU: también van como Release de GitHub (ver export_deploy.py)
+deploy/
+*.onnx
+
+# Varios
+.DS_Store

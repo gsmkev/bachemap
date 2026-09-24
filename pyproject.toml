@@ -1,0 +1,37 @@
+[project]
+name = "bachemap"
+version = "1.0.0"
+description = "Detección, priorización y georreferenciación de daños viales en fotos de calle"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "ultralytics>=8.3",
+    "torch>=2.2",
+    "scikit-learn>=1.4",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "pillow>=10.2",
+    "pyyaml>=6.0",
+    "joblib>=1.3",
+    "tqdm>=4.66",
+    "kagglehub>=0.3",
+    "streamlit>=1.35",
+    "wandb>=0.17",
+    "python-dotenv>=1.0",
+    "jupyterlab>=4.0",
+    "ipykernel>=6.29",
+]
+
+[tool.uv]
+# No es una librería: es un notebook más una app. No hay nada que construir ni instalar como paquete.
+package = false
+
+# En Linux x86_64, el torch de PyPI ya viene compilado con CUDA 12, así que `uv sync` alcanza para una
+# GPU NVIDIA. Para forzar otra versión de CUDA, descomentar el índice y fijar torch ahí:
+# [[tool.uv.index]]
+# name = "pytorch-cu121"
+# url = "https://download.pytorch.org/whl/cu121"
+# explicit = true
+#
+# [tool.uv.sources]
+# torch = { index = "pytorch-cu121" }
