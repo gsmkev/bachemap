@@ -31,6 +31,7 @@ TAG_MODELO = os.environ.get("BACHEMAP_MODEL_TAG", "v1")
 MODEL_PKL = Path(__file__).parent / "model.pkl"
 DIR_MODELOS = Path(__file__).parent / "deploy"
 DIR_FIGS = Path(__file__).parent / "figs"
+MUESTRA_CSV = Path(__file__).parent / "muestra_demo.csv"
 COLOR_PRIORIDAD = {"alta": (220, 30, 30), "media": (240, 160, 0), "baja": (90, 160, 90)}
 
 st.set_page_config(page_title="BacheMap", layout="wide")
@@ -115,6 +116,25 @@ def detectar(modelo, backend, bundle, imagen, barrio, tipo_via):
     return det
 
 
+@st.cache_data
+def cargar_muestra():
+    return pd.read_csv(MUESTRA_CSV)
+
+
+def agrupar_focos(det, cfg):
+    """DBSCAN (haversine) sobre las detecciones de prioridad alta/media. Devuelve (con_foco, tabla_focos)."""
+    urgentes = det[det["prioridad"].isin(["alta", "media"])].copy()
+    if len(urgentes) < cfg["min_samples"]:
+        return urgentes, None
+    urgentes["foco"] = DBSCAN(eps=cfg["eps_m"] / 6_371_000, min_samples=cfg["min_samples"],
+                              metric="haversine").fit_predict(np.radians(urgentes[["lat", "lon"]].values))
+    con_foco = urgentes[urgentes["foco"] >= 0]
+    tabla = con_foco.groupby("foco").agg(
+        detecciones=("foco", "size"), altas=("prioridad", lambda s: int((s == "alta").sum())),
+        barrio=("barrio", "first"), lat=("lat", "mean"), lon=("lon", "mean"))
+    return urgentes, tabla
+
+
 def dibujar(imagen, det):
     lienzo = imagen.convert("RGB").copy()
     dibujo = ImageDraw.Draw(lienzo)
@@ -164,24 +184,46 @@ with analizar:
     st.session_state["detecciones"] = pd.concat(detecciones) if detecciones else pd.DataFrame()
 
 with focos:
-    det = st.session_state.get("detecciones", pd.DataFrame())
-    urgentes = det[det["prioridad"].isin(["alta", "media"])] if not det.empty else det
+    subidas = st.session_state.get("detecciones", pd.DataFrame())
+    fuente = st.radio("Detecciones a agrupar", ["Datos de muestra (100 del test)", "Fotos que subiste"],
+                      horizontal=True, index=0 if subidas.empty else 1)
+    det = cargar_muestra() if fuente.startswith("Datos") else subidas
     cfg = bundle["dbscan"]
-    if len(urgentes) < cfg["min_samples"]:
-        st.info(f"Hacen falta al menos {cfg['min_samples']} detecciones de prioridad alta o media para formar un foco. "
-                f"Van {len(urgentes)}.")
+    st.caption(f"DBSCAN con distancia haversine, eps = {cfg['eps_m']} m, min_samples = {cfg['min_samples']}, "
+               f"sobre las detecciones de prioridad alta o media.")
+
+    if det.empty:
+        st.info("Subí fotos en la pestaña \"Analizar fotos\" para usar tus propias detecciones acá.")
     else:
-        urgentes = urgentes.copy()
-        urgentes["foco"] = DBSCAN(eps=cfg["eps_m"] / 6_371_000, min_samples=cfg["min_samples"],
-                                  metric="haversine").fit_predict(np.radians(urgentes[["lat", "lon"]].values))
-        st.map(urgentes[urgentes["foco"] >= 0][["lat", "lon"]])
-        st.dataframe(urgentes[urgentes["foco"] >= 0].groupby("foco").agg(
-            detecciones=("foco", "size"), altas=("prioridad", lambda s: int((s == "alta").sum())),
-            barrio=("barrio", "first"), lat=("lat", "mean"), lon=("lon", "mean")))
+        urgentes, tabla_focos = agrupar_focos(det, cfg)
+        if tabla_focos is None:
+            st.info(f"Hacen falta al menos {cfg['min_samples']} detecciones de prioridad alta o media para "
+                    f"formar un foco. Van {len(urgentes)}.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Focos", len(tabla_focos))
+            c2.metric("Detecciones agrupadas", int((urgentes["foco"] >= 0).sum()))
+            c3.metric("Ruido (sin foco)", int((urgentes["foco"] == -1).sum()))
+            st.map(urgentes[urgentes["foco"] >= 0][["lat", "lon"]])
+            st.dataframe(tabla_focos.sort_values(["altas", "detecciones"], ascending=False))
 
 with roi:
-    st.write("Escenarios calculados en el notebook con el recall de baches medido en test. "
-             "Los montos están en millones de guaraníes por año.")
+    st.write("El mecanismo es simple: un bache detectado temprano se repara cuando todavía es chico, "
+             "y eso ahorra asfalto.")
+    st.latex(r"\text{ahorro} = \text{baches/año} \times \text{cobertura} \times \text{recall}_{D40} "
+             r"\times \text{m}^2\text{/bache} \times \text{reducción de área} \times \text{costo/m}^2")
+    st.markdown(
+        f"- **baches/año**: 42.900 (3.574 bacheos mensuales × 12, dato de la Municipalidad de Asunción).\n"
+        f"- **cobertura**: qué fracción de los baches de la ciudad llega a relevarse con este sistema. Supuesto propio.\n"
+        f"- **recall D40**: **{bundle['metricas']['test_detector']['recall_D40']:.3f}**, medido en test — el único "
+        f"número de esta fórmula que sale del modelo, no de un supuesto.\n"
+        f"- **m²/bache**: 3,8 (6.600 m² reparados en 1.717 bacheos, dato municipal).\n"
+        f"- **reducción de área**: cuánto más chico sale el parche por repararlo temprano en vez de tarde. Supuesto propio.\n"
+        f"- **costo/m²**: hasta 305.000 Gs (cota superior, mezcla regularización asfáltica y bacheo). Supuesto propio.\n\n"
+        f"Al ahorro se le resta el **costo anual del sistema** (server, mantenimiento) para llegar al beneficio neto; "
+        f"`ROI = beneficio neto / costo del sistema`. Los tres escenarios cambian cobertura, reducción de área y "
+        f"costo del sistema — cobertura y reducción de área todavía no están validadas con la Dirección de Vialidad."
+    )
     st.dataframe(pd.DataFrame(bundle["roi"]).set_index("escenario"))
 
 with proyecto:
@@ -205,30 +247,78 @@ with proyecto:
              "confianza se elige maximizando F2 (pondera el recall el doble que la precisión), y se "
              "reportan también precisión, F1 y mAP50.")
 
-    st.graphviz_chart("""
-        digraph {
+    sel = bundle["seleccion"]
+    met = bundle["metricas"]
+    n_img = sel["n_imagenes"]
+
+    st.subheader("Arquitectura")
+    st.graphviz_chart(f"""
+        digraph {{
             rankdir=LR
-            node [shape=box, style="rounded,filled", fillcolor="#f5f5f5", fontname="sans-serif"]
-            foto [label="Foto de calle"]
-            yolo [label="YOLOv8n"]
-            det [label="Detecciones\n(clase, confianza, caja)"]
-            ctx [label="+ contexto\n(barrio, vía, GPS)"]
-            prio [label="Pipeline sklearn\n(prioridad)"]
-            dbscan [label="DBSCAN"]
+            fontname="sans-serif"
+            node [shape=box, style="rounded,filled", fillcolor="#f5f5f5", fontname="sans-serif", fontsize=11]
+            edge [fontname="sans-serif", fontsize=9]
+
+            subgraph cluster_0 {{
+                label="Etapa 1 · Detección — YOLOv8n"; style=dashed; fontname="sans-serif"; fontsize=11
+                img [label="Imagen\\n640×640×3"]
+                backbone [label="Backbone + Neck\\nCSPDarknet / PAN-FPN"]
+                head [label="Head anchor-free\\n3 escalas"]
+                nms [label="NMS\\nconf ≥ {bundle['umbral_confianza']}"]
+                img -> backbone -> head -> nms
+            }}
+            det [label="Detección\\n(clase, confianza, cx,cy,w,h)"]
+            nms -> det
+
+            subgraph cluster_1 {{
+                label="Etapa 2 · Prioridad — scikit-learn"; style=dashed; fontname="sans-serif"; fontsize=11
+                feat [label="9 features\\n6 numéricas + 3 categóricas"]
+                ct [label="ColumnTransformer\\nimputer+scaler / imputer+onehot"]
+                clf [label="{sel['prioridad']['modelo']}\\n(elegido por CV)"]
+                feat -> ct -> clf
+            }}
+            det -> feat [label="  + barrio, vía, GPS"]
+            prio [label="Prioridad\\nalta / media / baja"]
+            clf -> prio
+
+            subgraph cluster_2 {{
+                label="Etapa 3 · Focos"; style=dashed; fontname="sans-serif"; fontsize=11
+                dbscan [label="DBSCAN haversine\\neps={bundle['dbscan']['eps_m']} m, min_samples={bundle['dbscan']['min_samples']}"]
+            }}
+            prio -> dbscan [label="  alta/media"]
             focos [label="Focos geográficos"]
-            foto -> yolo -> det -> ctx -> prio -> dbscan -> focos
-        }
+            dbscan -> focos
+        }}
     """)
 
+    st.subheader("Protocolo de datos y entrenamiento")
     st.markdown(
-        "1. **Detección.** YOLOv8n entrenado sobre RDD2022, partiendo de pesos de COCO (se comparó "
-        "contra entrenar desde cero, ganó el preentrenado). El umbral de confianza se eligió en "
-        "validación maximizando F2, que pesa el recall el doble que la precisión.\n"
-        "2. **Prioridad.** Cada detección pasa por un `Pipeline` de scikit-learn (`ColumnTransformer` "
-        "+ clasificador) que le asigna prioridad alta/media/baja.\n"
-        "3. **Focos.** Las detecciones urgentes se agrupan con DBSCAN sobre lat/lon, para planificar "
-        "por zona en vez de por reclamo suelto."
+        f"- **Dataset**: RDD2022, split provisto por la fuente — {n_img['train']:,} train / "
+        f"{n_img['val']:,} val / {n_img['test']:,} test. Se excluyó `{sel['paises_excluidos'][0]}` "
+        f"(vista aérea, otro dominio que el de fotos de smartphone).\n"
+        f"- **Inicialización**: `{sel['detector']['inicializacion']}`, decidido comparando contra pesos "
+        f"aleatorios con el mismo presupuesto (tabla abajo).\n"
+        f"- **Augmentation**: flip horizontal (p=0,5), HSV suave, mosaic apagado en las últimas "
+        f"{sel['detector']['augmentation']['close_mosaic']} épocas.\n"
+        f"- **Entrenamiento**: `imgsz={sel['detector']['imgsz']}`, hasta la época "
+        f"{sel['detector']['mejor_epoca']}, {sel['detector']['minutos']:.0f} min.\n"
+        f"- **Selección de umbral e hiperparámetros**: todo se decide en validación (`{sel['detector']['regla_umbral']}` "
+        f"para el umbral, `{sel['prioridad']['regla']}` para el modelo de prioridad), se congela en "
+        f"`selection.json` y el test se evalúa una sola vez."
     )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Comparación de inicialización (mAP50 val, mismo presupuesto corto)")
+        st.dataframe(pd.DataFrame(sel["detector"]["comparacion_transfer"]).T.round(4))
+    with c2:
+        st.caption("Selección del modelo de prioridad (CV agrupada por imagen)")
+        st.dataframe(pd.DataFrame(sel["prioridad"]["cv"]).round(3))
+
+    st.subheader("Métricas en test")
+    c3, c4 = st.columns(2)
+    c3.dataframe(pd.DataFrame([met["test_detector"]]).T.rename(columns={0: "detector"}).round(4))
+    c4.dataframe(pd.DataFrame([met["test_prioridad"]]).T.rename(columns={0: "prioridad"}).round(4))
     st.caption("La georreferenciación y el target de prioridad son simulados en este proyecto — "
                "RDD2022 no tiene fotos de Asunción. El detalle está en el notebook y el README.")
 
